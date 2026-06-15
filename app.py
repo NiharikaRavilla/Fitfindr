@@ -12,10 +12,48 @@ Then open the localhost URL shown in your terminal (usually http://localhost:786
 but check your terminal — the port may differ).
 """
 
+from __future__ import annotations
+
 import gradio as gr
 
 from agent import run_agent
 from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _format_listing(item: dict) -> str:
+    """Format a listing dict into readable text for the UI."""
+    if not item:
+        return ""
+
+    title = item.get("title", "Unknown item")
+    price = item.get("price", "N/A")
+    platform = item.get("platform", "N/A")
+    size = item.get("size", "N/A")
+    condition = item.get("condition", "N/A")
+    category = item.get("category", "N/A")
+    brand = item.get("brand", "N/A")
+    colors = item.get("colors", [])
+    style_tags = item.get("style_tags", [])
+    description = item.get("description", "")
+
+    lines = [
+        f"**{title}**",
+        f"Price: ${price}",
+        f"Platform: {platform}",
+        f"Size: {size}",
+        f"Condition: {condition}",
+        f"Category: {category}",
+        f"Brand: {brand}",
+        f"Colors: {', '.join(colors) if colors else 'N/A'}",
+        f"Style tags: {', '.join(style_tags) if style_tags else 'N/A'}",
+    ]
+
+    if description:
+        lines.append(f"\nDescription: {description}")
+
+    return "\n".join(lines)
 
 
 # ── query handler ─────────────────────────────────────────────────────────────
@@ -43,8 +81,25 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
            string and return it along with session["outfit_suggestion"] and
            session["fit_card"].
     """
-    # TODO: implement this function
-    return "Agent not yet implemented.", "", ""
+    query = (user_query or "").strip()
+    if not query:
+        return "Please enter a search query.", "", ""
+
+    if wardrobe_choice == "Empty wardrobe (new user)":
+        wardrobe = get_empty_wardrobe()
+    else:
+        wardrobe = get_example_wardrobe()
+
+    session = run_agent(query, wardrobe)
+
+    if session.get("error"):
+        return session["error"], "", ""
+
+    listing_text = _format_listing(session.get("selected_item", {}))
+    outfit_text = session.get("outfit_suggestion") or ""
+    fit_card_text = session.get("fit_card") or ""
+
+    return listing_text, outfit_text, fit_card_text
 
 
 # ── interface ─────────────────────────────────────────────────────────────────
@@ -56,6 +111,7 @@ EXAMPLE_QUERIES = [
     "black combat boots size 8",
     "designer ballgown size XXS under $5",   # deliberate no-results test
 ]
+
 
 def build_interface():
     with gr.Blocks(title="FitFindr") as demo:
@@ -120,4 +176,4 @@ Describe what you're looking for — include size and price if you want to filte
 
 if __name__ == "__main__":
     demo = build_interface()
-    demo.launch()
+    demo.launch(share=True)

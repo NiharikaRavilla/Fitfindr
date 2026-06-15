@@ -64,6 +64,37 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
 
 
+_STOPWORDS = {
+    "looking", "for", "a", "an", "the", "i", "im", "i'm", "want", "need",
+    "to", "find", "search", "under", "below", "max", "maximum", "size",
+    "with", "and", "or", "out", "there", "what", "is", "are", "me", "my",
+}
+
+_SYNONYMS = {
+    "tee": {"tee", "tshirt", "t-shirt", "shirt", "t shirt"},
+    "tshirt": {"tee", "tshirt", "t-shirt", "shirt", "t shirt"},
+    "jacket": {"jacket", "coat", "blazer", "outerwear"},
+    "denim": {"denim", "jeans", "jacket"},
+    "jeans": {"jeans", "denim", "pants"},
+    "skirt": {"skirt", "mini", "midi"},
+    "dress": {"dress", "gown", "maxi", "mini", "midi"},
+    "sneakers": {"sneakers", "shoes", "trainers"},
+    "boots": {"boots", "shoes", "combat"},
+}
+
+
+def _normalize_query_terms(description: str) -> set[str]:
+    tokens = _tokenize(description)
+    cleaned = {t for t in tokens if t not in _STOPWORDS}
+
+    expanded = set(cleaned)
+    for token in cleaned:
+        if token in _SYNONYMS:
+            expanded.update(_SYNONYMS[token])
+
+    return expanded
+
+
 def _normalize_size(value: Any) -> str:
     return str(value).strip().lower() if value is not None else ""
 
@@ -115,6 +146,18 @@ def _item_text_fields(item: dict) -> str:
     return " ".join(parts).lower()
 
 
+def _term_matches_text(term: str, text: str, text_tokens: set[str]) -> bool:
+    term = term.strip().lower()
+    if not term:
+        return False
+
+    term_tokens = _tokenize(term)
+    if len(term_tokens) == 1:
+        return next(iter(term_tokens)) in text_tokens
+
+    return term in text
+
+
 def _score_listing(item: dict, description: str) -> int:
     """
     Score a listing based on keyword overlap, with title/description boosting.
@@ -125,25 +168,27 @@ def _score_listing(item: dict, description: str) -> int:
         return 0
 
     haystack = _item_text_fields(item)
-    tokens = _tokenize(query)
-    if not tokens:
+    haystack_tokens = _tokenize(haystack)
+    query_terms = _normalize_query_terms(query)
+    if not query_terms:
         return 0
 
     score = 0
 
-    # Exact phrase match is a strong signal.
+    # Strong signal for exact phrase match.
     if query in haystack:
-        score += 10
+        score += 12
 
-    # Token overlap across all searchable fields.
-    for token in tokens:
-        if token in haystack:
+    # Token/synonym overlap across searchable fields.
+    for token in query_terms:
+        if _term_matches_text(token, haystack, haystack_tokens):
             score += 2
 
-    # Bonus for title overlap.
+    # Extra boost for title overlap.
     title = str(item.get("title", "")).lower()
-    for token in tokens:
-        if token in title:
+    title_tokens = _tokenize(title)
+    for token in query_terms:
+        if _term_matches_text(token, title, title_tokens):
             score += 1
 
     return score

@@ -18,6 +18,10 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+from __future__ import annotations
+
+import re
+
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -42,6 +46,66 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "outfit_suggestion": None,   # string returned by suggest_outfit
         "fit_card": None,            # string returned by create_fit_card
         "error": None,               # set if the interaction ended early
+    }
+
+
+def _parse_query(query: str) -> dict:
+    """
+    Extract description, size, and max_price from a free-text query.
+
+    This parser is intentionally simple and deterministic so the planning loop
+    behaves consistently during testing.
+    """
+    text = query.strip()
+
+    # Price patterns like: under $30, below 30, max 30, <= 30
+    price_match = re.search(
+        r"(?:under|below|max(?:imum)?|<=)\s*\$?\s*(\d+(?:\.\d+)?)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    max_price = float(price_match.group(1)) if price_match else None
+
+    # Remove price phrases before fallback size detection so "$30" is not
+    # accidentally treated as numeric size 30.
+    text_without_price = re.sub(
+        r"(?:under|below|max(?:imum)?|<=)\s*\$?\s*\d+(?:\.\d+)?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # Size patterns like: size M, sz M, size: M
+    size_match = re.search(
+        r"(?:size|sz)\s*[:=]?\s*([a-z0-9\/\-]+)",
+        text_without_price,
+        flags=re.IGNORECASE,
+    )
+    if not size_match:
+        size_match = re.search(
+            r"(?<![A-Za-z'])\b(XXS|XS|S|M|L|XL|XXL|XXXL|\d{1,3})\b(?![A-Za-z'])",
+            text_without_price,
+            flags=re.IGNORECASE,
+        )
+    size = size_match.group(1) if size_match else None
+
+    # Remove obvious constraint phrases so the remaining text is the search description
+    description = text_without_price
+    description = re.sub(
+        r"(?:size|sz)\s*[:=]?\s*[a-z0-9\/\-]+",
+        "",
+        description,
+        flags=re.IGNORECASE,
+    )
+    description = re.sub(r"\s{2,}", " ", description).strip(" ,.-")
+
+    if not description:
+        description = query.strip()
+
+    return {
+        "description": description,
+        "size": size,
+        "max_price": max_price,
     }
 
 
@@ -92,9 +156,53 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: parse query
+    parsed = _parse_query(query)
+    session["parsed"] = parsed
+
+    # Step 3: search listings
+    results = search_listings(
+        description=parsed["description"],
+        size=parsed["size"],
+        max_price=parsed["max_price"],
+    )
+    session["search_results"] = results
+
+    if not results:
+        session["error"] = (
+            "No listings matched that search. Try broadening the description, "
+            "removing the size filter, or increasing the budget."
+        )
+        return session
+
+    # Step 4: select the top result
+    selected_item = results[0]
+    session["selected_item"] = selected_item
+
+    # Step 5: suggest outfit
+    outfit_suggestion = suggest_outfit(selected_item, wardrobe)
+    session["outfit_suggestion"] = outfit_suggestion
+
+    if not outfit_suggestion or not outfit_suggestion.strip():
+        session["error"] = (
+            "I found a listing, but I could not generate an outfit suggestion."
+        )
+        return session
+
+    # Step 6: create fit card
+    fit_card = create_fit_card(outfit_suggestion, selected_item)
+    session["fit_card"] = fit_card
+
+    if not fit_card or not fit_card.strip():
+        session["error"] = (
+            "I found the item and outfit, but I could not generate the fit card."
+        )
+        session["fit_card"] = None
+        return session
+
+    # Step 7: return session
     return session
 
 
